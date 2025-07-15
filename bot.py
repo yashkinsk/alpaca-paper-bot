@@ -37,7 +37,7 @@ def fetch_last_price(symbol):
         timeframe=TimeFrame.Minute,
         start=start,
         end=now,
-        feed="iex"  # ✅ FREE data source
+        feed="sip"  # ✅ FREE data source
     )
     bars = data_client.get_stock_bars(request).df
     if bars.empty:
