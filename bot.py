@@ -1,4 +1,4 @@
-# ✅ Alpaca Paper Trading Bot — с восстановлением позиций и ограничением капитала на акцию
+# ✅ Alpaca Paper Trading Bot — с восстановлением позиций и логами для Render
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
@@ -35,7 +35,9 @@ for pos in account_positions:
     if symbol in symbols:
         positions[symbol] = int(float(pos.qty))
         buy_prices[symbol] = float(pos.avg_entry_price)
-        print(f"🔄 Loaded position: {symbol} qty={positions[symbol]} @ {buy_prices[symbol]}")
+        print(f"🔄 Loaded position: {symbol} qty={positions[symbol]} @ {buy_prices[symbol]}", flush=True)
+
+print("📦 Positions loaded:", positions, flush=True)
 
 # --- Fetch historical bars ---
 def fetch_last_price(symbol):
@@ -47,16 +49,17 @@ def fetch_last_price(symbol):
             timeframe=TimeFrame.Minute,
             start=start,
             end=now,
-            feed="iex"  # ❗ SIP запрещён на Basic
+            feed="iex"
         )
         bars = data_client.get_stock_bars(request).df
         if bars.empty:
+            print(f"⚠️ No data for {symbol}", flush=True)
             return pd.DataFrame()
         df = bars.copy()
         df["symbol"] = symbol
         return df
     except Exception as e:
-        print(f"⚠️ Error fetching data for {symbol}: {e}")
+        print(f"⚠️ Error fetching data for {symbol}: {e}", flush=True)
         return pd.DataFrame()
 
 # --- RSI calculation ---
@@ -89,15 +92,17 @@ def should_sell(df, entry_price):
     rsi = compute_rsi(df['close'])
     price = last['close']
     profit = (price - entry_price) / entry_price
-    print(f"📊 {df['symbol'].iloc[-1]} | Price: {price:.2f} | Entry: {entry_price:.2f} | PnL: {profit*100:.2f}% | RSI: {rsi:.1f}")
+    print(f"📊 {df['symbol'].iloc[-1]} | Price: {price:.2f} | Entry: {entry_price:.2f} | PnL: {profit*100:.2f}% | RSI: {rsi:.1f}", flush=True)
     return rsi > 75 or profit <= -0.05 or profit >= 0.02
 
 # --- Main loop ---
-print("📈 Bot started. Monitoring stocks every 60 seconds...")
+print("📈 Bot started. Monitoring stocks every 60 seconds...", flush=True)
 
 while True:
     try:
         for symbol in symbols:
+            print(f"🔍 Checking {symbol}...", flush=True)
+
             df = fetch_last_price(symbol)
             if df.empty:
                 continue
@@ -117,7 +122,7 @@ while True:
                     trading_client.submit_order(order_data=order)
                     positions[symbol] = qty
                     buy_prices[symbol] = last_price
-                    print(f"[BUY]  {symbol} qty={qty} @ {last_price:.2f}")
+                    print(f"[BUY]  {symbol} qty={qty} @ {last_price:.2f}", flush=True)
 
             # SELL
             elif positions[symbol] > 0 and should_sell(df, buy_prices[symbol]):
@@ -130,11 +135,11 @@ while True:
                 )
                 trading_client.submit_order(order_data=order)
                 positions[symbol] = 0
-                print(f"[SELL] {symbol} qty={qty} @ {last_price:.2f}")
+                print(f"[SELL] {symbol} qty={qty} @ {last_price:.2f}", flush=True)
 
         time.sleep(60)
 
     except Exception as e:
-        print("❌ Unexpected error:")
+        print("❌ Unexpected error:", flush=True)
         traceback.print_exc()
         time.sleep(60)
