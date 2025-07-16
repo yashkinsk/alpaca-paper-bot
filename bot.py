@@ -1,4 +1,4 @@
-# ✅ Alpaca Paper Trading Strategy Bot with RSI, Volume Spike & Candle Confirmation
+# ✅ Alpaca Paper Trading Bot — с восстановлением позиций и ограничением капитала на акцию
 
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest
@@ -12,21 +12,32 @@ import pandas as pd
 import os
 import traceback
 
-# --- Load credentials from environment variables ---
+# --- API credentials ---
 API_KEY = os.getenv("APCA_API_KEY_ID")
 API_SECRET = os.getenv("APCA_API_SECRET_KEY")
 
-# --- Initialize Alpaca clients ---
+# --- Alpaca clients ---
 trading_client = TradingClient(API_KEY, API_SECRET, paper=True)
 data_client = StockHistoricalDataClient(API_KEY, API_SECRET)
 
-# --- Strategy Parameters ---
+# --- Strategy parameters ---
 symbols = ["LEN", "MSFT", "MRNA", "PFE", "NKE", "AMZN"]
-per_asset_balance = 100000 / len(symbols)
+portfolio_value = 100000
+per_asset_balance = portfolio_value / len(symbols)
+
 positions = {symbol: 0 for symbol in symbols}
 buy_prices = {symbol: 0 for symbol in symbols}
 
-# --- Fetch historical minute bars ---
+# --- Initialize from current positions ---
+account_positions = trading_client.get_all_positions()
+for pos in account_positions:
+    symbol = pos.symbol
+    if symbol in symbols:
+        positions[symbol] = int(float(pos.qty))
+        buy_prices[symbol] = float(pos.avg_entry_price)
+        print(f"🔄 Loaded position: {symbol} qty={positions[symbol]} @ {buy_prices[symbol]}")
+
+# --- Fetch historical bars ---
 def fetch_last_price(symbol):
     try:
         now = datetime.datetime.now(datetime.timezone.utc)
@@ -36,7 +47,7 @@ def fetch_last_price(symbol):
             timeframe=TimeFrame.Minute,
             start=start,
             end=now,
-            feed="iex"  # ✅ Free data
+            feed="iex"  # ❗ SIP запрещён на Basic
         )
         bars = data_client.get_stock_bars(request).df
         if bars.empty:
@@ -48,7 +59,7 @@ def fetch_last_price(symbol):
         print(f"⚠️ Error fetching data for {symbol}: {e}")
         return pd.DataFrame()
 
-# --- Compute RSI ---
+# --- RSI calculation ---
 def compute_rsi(series, period=14):
     delta = series.diff()
     gain = delta.where(delta > 0, 0)
@@ -57,9 +68,9 @@ def compute_rsi(series, period=14):
     avg_loss = loss.rolling(period).mean()
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
-    return rsi.iloc[-1] if not rsi.empty else 50  # Default neutral
+    return rsi.iloc[-1] if not rsi.empty else 50
 
-# --- Entry condition ---
+# --- Entry logic ---
 def should_buy(df):
     if len(df) < 15:
         return False
@@ -72,15 +83,16 @@ def should_buy(df):
         and rsi < 70
     )
 
-# --- Exit condition ---
+# --- Exit logic ---
 def should_sell(df, entry_price):
     last = df.iloc[-1]
     rsi = compute_rsi(df['close'])
     price = last['close']
     profit = (price - entry_price) / entry_price
+    print(f"📊 {df['symbol'].iloc[-1]} | Price: {price:.2f} | Entry: {entry_price:.2f} | PnL: {profit*100:.2f}% | RSI: {rsi:.1f}")
     return rsi > 75 or profit <= -0.05 or profit >= 0.02
 
-# === Main loop ===
+# --- Main loop ---
 print("📈 Bot started. Monitoring stocks every 60 seconds...")
 
 while True:
@@ -92,19 +104,22 @@ while True:
 
             last_price = df['close'].iloc[-1]
 
+            # BUY
             if positions[symbol] == 0 and should_buy(df):
                 qty = int(per_asset_balance // last_price)
-                order = MarketOrderRequest(
-                    symbol=symbol,
-                    qty=qty,
-                    side=OrderSide.BUY,
-                    time_in_force=TimeInForce.DAY
-                )
-                trading_client.submit_order(order_data=order)
-                positions[symbol] = qty
-                buy_prices[symbol] = last_price
-                print(f"[BUY]  {symbol} at {last_price:.2f}")
+                if qty > 0:
+                    order = MarketOrderRequest(
+                        symbol=symbol,
+                        qty=qty,
+                        side=OrderSide.BUY,
+                        time_in_force=TimeInForce.DAY
+                    )
+                    trading_client.submit_order(order_data=order)
+                    positions[symbol] = qty
+                    buy_prices[symbol] = last_price
+                    print(f"[BUY]  {symbol} qty={qty} @ {last_price:.2f}")
 
+            # SELL
             elif positions[symbol] > 0 and should_sell(df, buy_prices[symbol]):
                 qty = positions[symbol]
                 order = MarketOrderRequest(
@@ -115,11 +130,11 @@ while True:
                 )
                 trading_client.submit_order(order_data=order)
                 positions[symbol] = 0
-                print(f"[SELL] {symbol} at {last_price:.2f}")
+                print(f"[SELL] {symbol} qty={qty} @ {last_price:.2f}")
 
         time.sleep(60)
 
     except Exception as e:
         print("❌ Unexpected error:")
         traceback.print_exc()
-        time.sleep(60)  # Wait and retry
+        time.sleep(60)
